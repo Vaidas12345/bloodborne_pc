@@ -1,0 +1,83 @@
+name: Build UI stencil test
+on:
+  push:
+    branches:
+      - build/ui-stencil-test
+
+jobs:
+  renderer:
+    runs-on: windows-latest
+    steps:
+      - name: Keep LF line endings for FSR patches
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            git patch
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-vulkan-headers
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-vulkan-memory-allocator
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-sdl3
+            mingw-w64-clang-x86_64-fmt
+            mingw-w64-clang-x86_64-boost
+            mingw-w64-clang-x86_64-robin-map
+            mingw-w64-clang-x86_64-xxhash
+            mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-zydis
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-spirv-headers
+            mingw-w64-clang-x86_64-spirv-cross
+            mingw-w64-clang-x86_64-protobuf
+            mingw-w64-clang-x86_64-openssl
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-miniupnpc
+            mingw-w64-clang-x86_64-nlohmann-json
+      - name: Build game renderer
+        shell: msys2 {0}
+        run: |
+          sed -i 's/-DCMAKE_BUILD_TYPE=RelWithDebInfo/-DCMAKE_BUILD_TYPE=MinSizeRel/g; s/ninja -C out\/gpu/ninja -j1 -C out\/gpu/g' build.sh
+          if ! bash build.sh; then
+            if ! ninja -C out/gpu -j1 -v bb-probe > out/gpu-retry.log 2>&1; then
+              tail -100 out/gpu-build.log || true
+              tail -100 out/gpu-retry.log || true
+              exit 1
+            fi
+            cp out/gpu/bb-probe.exe out/
+          fi
+          mkdir -p renderer-artifact
+          llvm-strip --strip-debug -o renderer-artifact/bb-probe.exe out/bb-probe.exe
+      - name: Run project UI and settings tests
+        shell: msys2 {0}
+        run: |
+          ninja -C out/gpu -j1 ui-composition-test output-settings-test
+          out/gpu/ui-composition-test.exe
+          BB_UI_RES=1920x1200 out/gpu/ui-composition-test.exe
+          out/gpu/output-settings-test.exe
+          python tests/test_launcher_output.py
+          python tests/test_patches.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bbport-ui-stencil-renderer
+          path: renderer-artifact/
+          if-no-files-found: error
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbport-ui-stencil-build-log
+          path: |
+            out/gpu-build.log
+            out/gpu-retry.log
+          if-no-files-found: ignore
